@@ -1,0 +1,21 @@
+[
+  {
+    "id": "5030af06-971d-4440-841b-1653fbe07a9d",
+    "organizer_id": null,
+    "title": "ABCD",
+    "description": "Welcome to ABCD, an intimate sanctuary crafted for the discerning soul in the heart of Bengaluru. Vibe by Swaniki invites you to step away from the digital noise and immerse yourself in a curated evening where luxury meets authentic human connection. This isn't just an event; it is a sensory journey designed to nourish your spirit. From the moment you arrive, you will be enveloped in an atmosphere of warmth, characterized by soft lighting, artisanal refreshments, and melodies that resonate with the heart. Our hospitality is rooted in the Indian tradition of 'Atithi Devo Bhava,' ensuring every guest feels seen and valued. Engage in meaningful conversations with fellow visionaries, enjoy hand-picked gourmet delights, and participate in a shared experience that celebrates the beauty of slow living. We have meticulously selected every element—from the fragrance in the air to the textures of the space—to ensure a transformative evening. Come, be a part of a community that values depth over distance. Secure your spot for an unforgettable Bengaluru night where you aren't just an attendee, but an essential part of the tapestry we are weaving together.",
+    "category": "Gathering",
+    "theme_template": "Grove",
+    "start_time": "2026-09-21T13:30:00+00:00",
+    "end_time": "2026-09-21T16:30:00+00:00",
+    "location": "43 Residency Road, Shanthala Nagar, Bengaluru",
+    "is_virtual": false,
+    "capacity": 40,
+    "approval_required": false,
+    "status": "published",
+    "created_at": "2026-09-18T17:53:55.580436+00:00",
+    "cover_url": "https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&w=1200&q=80",
+    "custom_questions": [],
+    "venue_name": "WeWork Galaxy"
+  }
+]

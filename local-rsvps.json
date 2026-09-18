@@ -1,0 +1,15 @@
+[
+  {
+    "id": "6cbd4d4e-cf0b-459b-9fd0-90339586efc1",
+    "event_id": "5bf0ed2a-b70e-470a-ab16-2256fab9de5e",
+    "user_id": null,
+    "guest_name": "Rahul Sharma",
+    "guest_email": "rahul.sharma@example.com",
+    "status": "confirmed",
+    "answers": {
+      "phone": "+91 9876543210",
+      "dietary": "Vegetarian"
+    },
+    "created_at": "2026-09-18T17:48:19.320489+00:00"
+  }
+]

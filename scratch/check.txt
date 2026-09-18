@@ -1,0 +1,3 @@
+import { submitRSVPRecord, getLocalRSVPs } from './src/lib/events.ts';
+
+// Note: since it's typescript, let's write a small script we can test with node or verify via tsc
