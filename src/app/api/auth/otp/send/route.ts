@@ -4,6 +4,7 @@ import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
 
 import { saveOtp } from '@/lib/otp-store';
+import { generateVerificationToken } from '@/lib/serverless-otp';
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,7 +19,10 @@ export async function POST(req: NextRequest) {
     // Generate a random 6-digit numeric OTP
     const code = Math.floor(100000 + Math.random() * 900000).toString();
 
-    // Save to shared file-backed store (15 minutes expiry)
+    // Generate stateless cryptographic HMAC verification token (for Vercel serverless)
+    const verificationToken = generateVerificationToken(normalizedEmail, code);
+
+    // Also save to shared file-backed store (for Localhost persistence)
     saveOtp(normalizedEmail, code, role, 15 * 60 * 1000);
 
     let sent = false;
@@ -105,12 +109,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       sent: true,
       deliveryMethod,
       message: `Verification code dispatched to ${normalizedEmail}`,
+      verificationToken,
     });
+
+    // Set cookie with the token so it automatically accompanies subsequent verify requests
+    response.cookies.set('vibe_otp_token', verificationToken, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 15 * 60, // 15 minutes
+      path: '/',
+    });
+
+    return response;
   } catch (err: any) {
     console.error('OTP Send Route Error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

@@ -252,6 +252,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
         const resData = await res.json();
         customSent = !!resData?.success;
+        if (resData?.success && resData?.verificationToken) {
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('vibe_verification_token', resData.verificationToken);
+            sessionStorage.setItem('vibe_verification_token', resData.verificationToken);
+          }
+        }
         if (!resData?.success) {
           sendError = resData?.error || null;
         }
@@ -313,6 +319,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
         const resData = await res.json();
         customSent = !!resData?.success;
+        if (resData?.success && resData?.verificationToken) {
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('vibe_verification_token', resData.verificationToken);
+            sessionStorage.setItem('vibe_verification_token', resData.verificationToken);
+          }
+        }
         if (!resData?.success) {
           sendError = resData?.error || null;
         }
@@ -363,7 +375,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const verifyEmailOtp = async (
     email: string,
     token: string,
-    meta?: { role?: 'organizer' | 'guest'; name?: string; handle?: string }
+    meta?: { role?: 'organizer' | 'guest'; name?: string; handle?: string; verificationToken?: string }
   ) => {
     try {
       const normalizedEmail = email.trim().toLowerCase();
@@ -372,7 +384,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       let verifiedUserId: string | null = null;
       let verifyError: string | null = null;
 
-      // 1. First verify against custom server store (Resend/Gmail SMTP codes)
+      // Retrieve stateless verification token (saved during send)
+      const verificationToken =
+        meta?.verificationToken ||
+        (typeof window !== 'undefined'
+          ? sessionStorage.getItem('vibe_verification_token') ||
+            localStorage.getItem('vibe_verification_token') ||
+            ''
+          : '');
+
+      // 1. First verify against custom server store (works statelessly on Vercel + Localhost)
       try {
         const customRes = await fetch('/api/auth/otp/verify', {
           method: 'POST',
@@ -380,6 +401,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           body: JSON.stringify({
             email: normalizedEmail,
             token: cleanToken,
+            verificationToken: verificationToken || undefined,
             role: finalRole,
             name: meta?.name,
             handle: meta?.handle,
@@ -391,7 +413,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } else {
           verifyError = customData.error;
         }
-      } catch {}
+      } catch (err: any) {
+        verifyError = err.message;
+      }
 
       // 2. If custom verify didn't match, check Supabase Auth OTP
       let supaUser: any = null;
