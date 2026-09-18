@@ -26,48 +26,45 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: check.error || 'Invalid verification code.' }, { status: 400 });
     }
 
-    // Initialize Supabase admin/server client
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
-    // Upsert or create user / profile in public.profiles
+    // Upsert or create user / profile in public.profiles (if table exists)
     const displayName = name || normalizedEmail.split('@')[0];
     const userHandle = handle || normalizedEmail.split('@')[0];
+    let profileId: string | undefined = undefined;
 
-    // Check if profile exists
-    const { data: existingProfile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('email', normalizedEmail)
-      .maybeSingle();
-
-    let profileId = existingProfile?.id;
-
-    if (!profileId) {
-      // Try to insert new profile
-      const { data: inserted, error: insertError } = await supabase
+    try {
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      const { data: existingProfile } = await supabase
         .from('profiles')
-        .insert([
-          {
-            email: normalizedEmail,
-            role: 'organizer',
-            name: displayName,
-            handle: userHandle,
-          },
-        ])
-        .select()
+        .select('*')
+        .eq('email', normalizedEmail)
         .maybeSingle();
 
-      if (inserted) {
-        profileId = inserted.id;
-      } else if (insertError) {
-        console.warn('Profile insert warning:', insertError.message);
+      if (existingProfile?.id) {
+        profileId = existingProfile.id;
+        await supabase
+          .from('profiles')
+          .update({ role: 'organizer' })
+          .eq('id', profileId);
+      } else {
+        const { data: inserted } = await supabase
+          .from('profiles')
+          .insert([
+            {
+              email: normalizedEmail,
+              role: 'organizer',
+              name: displayName,
+              handle: userHandle,
+            },
+          ])
+          .select()
+          .maybeSingle();
+
+        if (inserted?.id) {
+          profileId = inserted.id;
+        }
       }
-    } else {
-      // Update role to organizer as requested
-      await supabase
-        .from('profiles')
-        .update({ role: 'organizer' })
-        .eq('id', profileId);
+    } catch (profErr) {
+      console.warn('[Profile lookup notice]:', profErr);
     }
 
     return NextResponse.json({

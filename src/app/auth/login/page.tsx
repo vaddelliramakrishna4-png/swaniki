@@ -41,13 +41,19 @@ function AuthContent() {
 
   const [mode, setMode] = useState<'signin' | 'signup'>(initialMode);
   const [role, setRole] = useState<'organizer' | 'guest'>('organizer');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('vibe_pending_auth_email') || '';
+    }
+    return '';
+  });
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [handle, setHandle] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [step, setStep] = useState<'form' | 'otp' | 'success'>('form');
   const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,12 +64,45 @@ function AuthContent() {
     }
   }, [profile, step]);
 
+  const getPendingEmail = () => {
+    return (
+      email.trim() ||
+      (typeof window !== 'undefined'
+        ? localStorage.getItem('vibe_pending_auth_email') || ''
+        : '')
+    ).trim().toLowerCase();
+  };
+
+  const handleResendCode = async () => {
+    const targetEmail = getPendingEmail();
+    if (!targetEmail || resending) return;
+    setResending(true);
+    setError(null);
+    try {
+      const res = await signInWithEmail(targetEmail, 'organizer');
+      if (res.success) {
+        setMessage(`A fresh 6-digit code has been dispatched to ${targetEmail}`);
+      } else {
+        setError(res.error || 'Failed to resend code');
+      }
+    } catch {
+      setError('Unable to resend code right now');
+    } finally {
+      setResending(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) return;
 
     setLoading(true);
     setError(null);
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('vibe_pending_auth_email', cleanEmail);
+    }
 
     if (mode === 'signup') {
       if (!name.trim()) {
@@ -72,7 +111,7 @@ function AuthContent() {
         return;
       }
       const res = await signUpWithEmail({
-        email: email.trim(),
+        email: cleanEmail,
         name: name.trim(),
         role: 'organizer',
         handle: handle.trim() || undefined,
@@ -82,18 +121,18 @@ function AuthContent() {
 
       if (res.success) {
         setStep('otp');
-        setMessage(`Verification code dispatched to ${email.trim()}. Please check your inbox.`);
+        setMessage(`Verification code dispatched to ${cleanEmail}. Please check your inbox.`);
       } else {
         setError(res.error || 'Failed to create account. Please try again.');
       }
     } else {
       // Sign in
-      const res = await signInWithEmail(email.trim(), 'organizer');
+      const res = await signInWithEmail(cleanEmail, 'organizer');
       setLoading(false);
 
       if (res.success) {
         setStep('otp');
-        setMessage(`We've sent a 6-digit login verification code to ${email.trim()}`);
+        setMessage(`We've sent a 6-digit login verification code to ${cleanEmail}`);
       } else {
         setError(res.error || 'Failed to dispatch login code. Please check your email address.');
       }
@@ -102,12 +141,22 @@ function AuthContent() {
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!otpCode.trim()) return;
+    const targetEmail = getPendingEmail();
+    const cleanToken = otpCode.trim().replace(/\D/g, '');
+
+    if (!targetEmail) {
+      setError('Email address is missing. Please click "Change email" and re-enter your email.');
+      return;
+    }
+    if (!cleanToken || cleanToken.length < 6) {
+      setError('Please enter the full 6-digit security code from your email.');
+      return;
+    }
 
     setLoading(true);
     setError(null);
 
-    const res = await verifyEmailOtp(email.trim(), otpCode.trim(), {
+    const res = await verifyEmailOtp(targetEmail, cleanToken, {
       role: 'organizer',
       name: name.trim() || undefined,
       handle: handle.trim() || undefined,
@@ -397,9 +446,19 @@ function AuthContent() {
                       className="w-full pl-10 pr-4 py-3 bg-[#F9F7F4] border border-[#E8E4DF] rounded-xl text-center tracking-[0.4em] font-mono text-lg font-bold text-[#1A1A2E] outline-none focus:border-[#1A1A2E] focus:bg-white transition-colors"
                     />
                   </div>
-                  <p className="text-[11px] text-[#8A8A8A] mt-1.5 flex items-center gap-1">
-                    <span>Check your email inbox for the 6-digit security code.</span>
-                  </p>
+                  <div className="flex items-center justify-between mt-2 text-[11px] text-[#8A8A8A]">
+                    <span>
+                      Sent to: <strong className="text-[#1A1A2E]">{getPendingEmail() || email}</strong>
+                    </span>
+                    <button
+                      type="button"
+                      disabled={resending}
+                      onClick={handleResendCode}
+                      className="text-[#E8621A] font-semibold hover:underline disabled:opacity-50"
+                    >
+                      {resending ? 'Sending...' : 'Resend code'}
+                    </button>
+                  </div>
                 </div>
 
                 <button

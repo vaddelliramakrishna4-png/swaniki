@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     if (resendApiKey && resendApiKey !== 'test') {
       try {
         const resend = new Resend(resendApiKey);
-        await resend.emails.send({
+        const resendRes = await resend.emails.send({
           from: process.env.RESEND_FROM_EMAIL || 'Vibe by Swaniki <onboarding@resend.dev>',
           to: normalizedEmail,
           subject: `Your Vibe Login Security Code: ${code}`,
@@ -45,13 +45,17 @@ export async function POST(req: NextRequest) {
                 <div style="font-family: monospace; font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #1A1A2E; background: #F4F1EC; padding: 14px 20px; border-radius: 8px; display: inline-block; border: 1px dashed #C9A84C;">
                   ${code}
                 </div>
-                <p style="font-size: 12px; color: #888; margin-top: 16px; margin-bottom: 0;">This code expires in 10 minutes. If you did not request this, please ignore this email.</p>
+                <p style="font-size: 12px; color: #888; margin-top: 16px; margin-bottom: 0;">This code expires in 15 minutes. If you did not request this, please ignore this email.</p>
               </div>
             </div>
           `,
         });
-        sent = true;
-        deliveryMethod = 'resend';
+        if (!resendRes.error && resendRes.data) {
+          sent = true;
+          deliveryMethod = 'resend';
+        } else {
+          console.warn('[Resend OTP Send notice]:', resendRes.error?.message);
+        }
       } catch (err: any) {
         console.warn('[Resend OTP Send Warning]:', err.message);
       }
@@ -90,9 +94,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    if (!sent) {
+      return NextResponse.json(
+        {
+          success: false,
+          sent: false,
+          error: 'Unable to deliver verification email. Please check your email address or try again in a few moments.',
+        },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
-      sent,
+      sent: true,
       deliveryMethod,
       message: `Verification code dispatched to ${normalizedEmail}`,
     });

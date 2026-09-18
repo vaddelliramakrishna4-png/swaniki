@@ -238,10 +238,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const normalizedEmail = email.trim().toLowerCase();
       if (typeof window !== 'undefined') {
         localStorage.setItem(STORAGE_KEY_ROLE, role);
+        localStorage.setItem('vibe_pending_auth_email', normalizedEmail);
       }
 
-      // 1. Dispatch custom 6-digit code to shared store & Resend/Nodemailer
+      // 1. Dispatch custom 6-digit code via Resend / Gmail SMTP
       let customSent = false;
+      let sendError: string | null = null;
       try {
         const res = await fetch('/api/auth/otp/send', {
           method: 'POST',
@@ -250,29 +252,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
         const resData = await res.json();
         customSent = !!resData?.success;
-      } catch (e) {
+        if (!resData?.success) {
+          sendError = resData?.error || null;
+        }
+      } catch (e: any) {
+        sendError = e.message;
         console.warn('Pre-dispatch custom OTP error:', e);
       }
 
-      // 2. Also trigger Supabase Auth OTP
-      const redirectUrl =
-        typeof window !== 'undefined'
-          ? `${window.location.origin}/auth/callback`
-          : undefined;
+      // 2. Only fallback to Supabase Auth OTP if custom mailer failed
+      if (!customSent) {
+        try {
+          const redirectUrl =
+            typeof window !== 'undefined'
+              ? `${window.location.origin}/auth/callback`
+              : undefined;
 
-      const { error } = await supabase.auth.signInWithOtp({
-        email: normalizedEmail,
-        options: {
-          shouldCreateUser: true,
-          emailRedirectTo: redirectUrl,
-          data: {
-            role,
-          },
-        },
-      });
+          const { error: supaErr } = await supabase.auth.signInWithOtp({
+            email: normalizedEmail,
+            options: {
+              shouldCreateUser: true,
+              emailRedirectTo: redirectUrl,
+              data: { role },
+            },
+          });
+          if (!supaErr) {
+            return { success: true };
+          }
+        } catch {}
 
-      if (error && !customSent) {
-        return { success: false, error: error.message };
+        return {
+          success: false,
+          error: sendError || 'Unable to dispatch verification code. Please check your email address.',
+        };
       }
 
       return { success: true };
@@ -287,10 +299,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const normalizedEmail = email.trim().toLowerCase();
       if (typeof window !== 'undefined') {
         localStorage.setItem(STORAGE_KEY_ROLE, role);
+        localStorage.setItem('vibe_pending_auth_email', normalizedEmail);
       }
 
-      // 1. Dispatch custom 6-digit code to shared store & Resend/Nodemailer
+      // 1. Dispatch custom 6-digit code via Resend / Gmail SMTP
       let customSent = false;
+      let sendError: string | null = null;
       try {
         const res = await fetch('/api/auth/otp/send', {
           method: 'POST',
@@ -299,32 +313,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
         const resData = await res.json();
         customSent = !!resData?.success;
-      } catch (e) {
+        if (!resData?.success) {
+          sendError = resData?.error || null;
+        }
+      } catch (e: any) {
+        sendError = e.message;
         console.warn('Pre-dispatch custom OTP error on signup:', e);
       }
 
-      // 2. Also trigger Supabase Auth OTP
-      const redirectUrl =
-        typeof window !== 'undefined'
-          ? `${window.location.origin}/auth/callback`
-          : undefined;
+      // 2. Only fallback to Supabase Auth OTP if custom mailer failed
+      if (!customSent) {
+        try {
+          const redirectUrl =
+            typeof window !== 'undefined'
+              ? `${window.location.origin}/auth/callback`
+              : undefined;
 
-      const { error } = await supabase.auth.signInWithOtp({
-        email: normalizedEmail,
-        options: {
-          shouldCreateUser: true,
-          emailRedirectTo: redirectUrl,
-          data: {
-            full_name: name,
-            role,
-            handle: handle || normalizedEmail.split('@')[0],
-            phone: phone || '',
-          },
-        },
-      });
+          const { error: supaErr } = await supabase.auth.signInWithOtp({
+            email: normalizedEmail,
+            options: {
+              shouldCreateUser: true,
+              emailRedirectTo: redirectUrl,
+              data: {
+                full_name: name,
+                role,
+                handle: handle || normalizedEmail.split('@')[0],
+                phone: phone || '',
+              },
+            },
+          });
+          if (!supaErr) {
+            return { success: true };
+          }
+        } catch {}
 
-      if (error && !customSent) {
-        return { success: false, error: error.message };
+        return {
+          success: false,
+          error: sendError || 'Unable to dispatch verification code. Please check your email address.',
+        };
       }
 
       return { success: true };
@@ -341,56 +367,78 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ) => {
     try {
       const normalizedEmail = email.trim().toLowerCase();
-      const cleanToken = token.trim();
+      const cleanToken = token.trim().replace(/\D/g, '');
+      const finalRole: 'organizer' | 'guest' = 'organizer';
+      let verifiedUserId: string | null = null;
+      let verifyError: string | null = null;
 
-      // 1. First attempt standard Supabase OTP verification
-      const { data, error } = await supabase.auth.verifyOtp({
-        email: normalizedEmail,
-        token: cleanToken,
-        type: 'email',
-      });
-
-      let verifiedUserId: string | null = data?.user?.id || null;
-      const finalRole: 'organizer' | 'guest' = 'organizer'; // Ensure organizer role on login
-
-      if (error) {
-        // 2. If Supabase verify failed, try custom server verification endpoint (Resend/Nodemailer codes)
-        try {
-          const customRes = await fetch('/api/auth/otp/verify', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: normalizedEmail,
-              token: cleanToken,
-              role: finalRole,
-              name: meta?.name,
-              handle: meta?.handle,
-            }),
-          });
-          const customData = await customRes.json();
-          if (customData.success && customData.user) {
-            verifiedUserId = customData.user.id;
-          } else {
-            return {
-              success: false,
-              error: customData.error || error.message || 'Invalid verification code',
-            };
-          }
-        } catch {
-          return { success: false, error: error.message || 'Failed to verify verification code' };
+      // 1. First verify against custom server store (Resend/Gmail SMTP codes)
+      try {
+        const customRes = await fetch('/api/auth/otp/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: normalizedEmail,
+            token: cleanToken,
+            role: finalRole,
+            name: meta?.name,
+            handle: meta?.handle,
+          }),
+        });
+        const customData = await customRes.json();
+        if (customData.success && customData.user) {
+          verifiedUserId = customData.user.id;
+        } else {
+          verifyError = customData.error;
         }
+      } catch {}
+
+      // 2. If custom verify didn't match, check Supabase Auth OTP
+      let supaUser: any = null;
+      if (!verifiedUserId) {
+        try {
+          const { data: supaData, error: supaError } = await supabase.auth.verifyOtp({
+            email: normalizedEmail,
+            token: cleanToken,
+            type: 'email',
+          });
+          if (supaData?.user?.id) {
+            verifiedUserId = supaData.user.id;
+            supaUser = supaData.user;
+          } else if (supaError) {
+            console.warn('[Supabase OTP verify fallback]:', supaError.message);
+          }
+        } catch {}
+      }
+
+      if (!verifiedUserId) {
+        return {
+          success: false,
+          error:
+            verifyError ||
+            'Invalid verification code. Please check your 6-digit code or request a new one.',
+        };
       }
 
       if (verifiedUserId) {
-        // Create or update the record in public.profiles (id, email, role: 'organizer')
+        const userName =
+          meta?.name ||
+          supaUser?.user_metadata?.full_name ||
+          normalizedEmail.split('@')[0];
+        const userHandle =
+          meta?.handle ||
+          supaUser?.user_metadata?.handle ||
+          normalizedEmail.split('@')[0];
+
+        // Create or update the record in public.profiles (if table exists)
         try {
           await supabase.from('profiles').upsert(
             {
               id: verifiedUserId,
               email: normalizedEmail,
               role: 'organizer',
-              name: meta?.name || data?.user?.user_metadata?.full_name || normalizedEmail.split('@')[0],
-              handle: meta?.handle || data?.user?.user_metadata?.handle || normalizedEmail.split('@')[0],
+              name: userName,
+              handle: userHandle,
               created_at: new Date().toISOString(),
             },
             { onConflict: 'id' }
@@ -401,11 +449,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const newProf: UserProfile = {
           id: verifiedUserId,
-          name: meta?.name || data?.user?.user_metadata?.full_name || normalizedEmail.split('@')[0],
+          name: userName,
           email: normalizedEmail,
-          handle: meta?.handle || data?.user?.user_metadata?.handle || normalizedEmail.split('@')[0],
+          handle: userHandle,
           role: 'organizer',
-          phone: data?.user?.user_metadata?.phone || '',
+          phone: supaUser?.user_metadata?.phone || '',
         };
         saveProfileLocally(newProf);
         setUser({
