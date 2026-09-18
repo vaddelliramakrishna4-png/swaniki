@@ -52,7 +52,9 @@ function AuthContent() {
     return '';
   });
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [handle, setHandle] = useState('');
@@ -146,6 +148,10 @@ function AuthContent() {
     }
     if (!password || password.length < 6) {
       setError('Password must be at least 6 characters');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match. Please re-enter your password.');
       return;
     }
 
@@ -460,6 +466,42 @@ function AuthContent() {
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+                </div>
+
+                {/* Confirm Password */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#1A1A2E] mb-1">Confirm Password</label>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-[#8A8A8A] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      id="signup-confirm-password"
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      required
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Re-enter your password"
+                      className={`w-full pl-10 pr-10 py-2.5 bg-[#F9F7F4] border rounded-xl text-sm text-[#0F0F0F] outline-none focus:bg-white transition-colors ${
+                        confirmPassword && password !== confirmPassword
+                          ? 'border-[#E8621A] focus:border-[#E8621A]'
+                          : confirmPassword && password === confirmPassword
+                          ? 'border-[#1A7A4A] focus:border-[#1A7A4A]'
+                          : 'border-[#E8E4DF] focus:border-[#1A1A2E]'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#8A8A8A] hover:text-[#1A1A2E]"
+                    >
+                      {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  {confirmPassword && password !== confirmPassword && (
+                    <p className="text-[10px] text-[#E8621A] mt-1">Passwords don't match</p>
+                  )}
+                  {confirmPassword && password === confirmPassword && (
+                    <p className="text-[10px] text-[#1A7A4A] mt-1">✓ Passwords match</p>
+                  )}
                   <p className="text-[10px] text-[#8A8A8A] mt-1">You'll use this to log in instantly after email verification</p>
                 </div>
 
