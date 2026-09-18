@@ -22,6 +22,7 @@ interface SignUpParams {
   email: string;
   name: string;
   role: 'organizer' | 'guest';
+  password?: string;
   handle?: string;
   phone?: string;
 }
@@ -31,12 +32,13 @@ interface AuthContextType {
   session: Session | null;
   profile: UserProfile | null;
   loading: boolean;
+  signInWithPassword: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   signInWithEmail: (email: string, role?: 'organizer' | 'guest') => Promise<{ success: boolean; error?: string }>;
   signUpWithEmail: (params: SignUpParams) => Promise<{ success: boolean; error?: string }>;
   verifyEmailOtp: (
     email: string,
     token: string,
-    meta?: { role?: 'organizer' | 'guest'; name?: string; handle?: string }
+    meta?: { role?: 'organizer' | 'guest'; name?: string; handle?: string; password?: string; verificationToken?: string }
   ) => Promise<{ success: boolean; error?: string }>;
   switchRole: (role: 'organizer' | 'guest') => void;
   updateProfile: (updates: Partial<UserProfile>) => void;
@@ -232,6 +234,68 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Instant password sign in (no OTP required)
+  const signInWithPassword = async (email: string, password: string) => {
+    try {
+      const normalizedEmail = email.trim().toLowerCase();
+
+      // 1. Try Supabase Auth signInWithPassword
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      });
+
+      if (!error && data?.user) {
+        const meta = data.user.user_metadata || {};
+        const determinedRole = meta.role || (typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_ROLE) as 'organizer' | 'guest' : null) || 'organizer';
+        const newProf: UserProfile = {
+          id: data.user.id,
+          name: meta.full_name || meta.name || normalizedEmail.split('@')[0],
+          email: normalizedEmail,
+          handle: meta.handle || normalizedEmail.split('@')[0],
+          role: determinedRole,
+          phone: meta.phone || '',
+          avatar_url: meta.avatar_url || '',
+        };
+        saveProfileLocally(newProf);
+        if (data.session) setSession(data.session);
+        return { success: true };
+      }
+
+      // 2. Fallback to server API route
+      try {
+        const res = await fetch('/api/auth/password/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: normalizedEmail, password }),
+        });
+        const resData = await res.json();
+        if (resData.success && resData.user) {
+          const newProf: UserProfile = {
+            id: resData.user.id,
+            name: resData.user.name || normalizedEmail.split('@')[0],
+            email: normalizedEmail,
+            handle: resData.user.handle || normalizedEmail.split('@')[0],
+            role: resData.user.role || 'organizer',
+          };
+          saveProfileLocally(newProf);
+          return { success: true };
+        }
+        return { success: false, error: resData.error || 'Invalid email or password.' };
+      } catch {}
+
+      return {
+        success: false,
+        error:
+          error?.message?.toLowerCase().includes('invalid login credentials')
+            ? 'Invalid email or password. Please check your credentials.'
+            : error?.message || 'Sign in failed. Please try again.',
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Sign in failed' };
+    }
+  };
+
   // Passwordless OTP sign in
   const signInWithEmail = async (email: string, role: 'organizer' | 'guest' = 'organizer') => {
     try {
@@ -299,13 +363,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Sign up with full details
-  const signUpWithEmail = async ({ email, name, role, handle, phone }: SignUpParams) => {
+  // Sign up with full details (stashes password temporarily for OTP-verified registration)
+  const signUpWithEmail = async ({ email, name, role, password, handle, phone }: SignUpParams) => {
     try {
       const normalizedEmail = email.trim().toLowerCase();
       if (typeof window !== 'undefined') {
         localStorage.setItem(STORAGE_KEY_ROLE, role);
         localStorage.setItem('vibe_pending_auth_email', normalizedEmail);
+        // Stash registration details temporarily so verifyEmailOtp can finalize account creation
+        if (password) {
+          sessionStorage.setItem('vibe_pending_password', password);
+        }
+        localStorage.setItem('vibe_pending_name', name || '');
+        localStorage.setItem('vibe_pending_handle', handle || normalizedEmail.split('@')[0]);
+        localStorage.setItem('vibe_pending_phone', phone || '');
       }
 
       // 1. Dispatch custom 6-digit code via Resend / Gmail SMTP
@@ -375,7 +446,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const verifyEmailOtp = async (
     email: string,
     token: string,
-    meta?: { role?: 'organizer' | 'guest'; name?: string; handle?: string; verificationToken?: string }
+    meta?: { role?: 'organizer' | 'guest'; name?: string; handle?: string; password?: string; verificationToken?: string }
   ) => {
     try {
       const normalizedEmail = email.trim().toLowerCase();
@@ -445,14 +516,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (verifiedUserId) {
-        const userName =
-          meta?.name ||
-          supaUser?.user_metadata?.full_name ||
-          normalizedEmail.split('@')[0];
-        const userHandle =
-          meta?.handle ||
-          supaUser?.user_metadata?.handle ||
-          normalizedEmail.split('@')[0];
+        const pendingPassword =
+          meta?.password ||
+          (typeof window !== 'undefined' ? sessionStorage.getItem('vibe_pending_password') || '' : '');
+        const pendingName = typeof window !== 'undefined' ? localStorage.getItem('vibe_pending_name') || '' : '';
+        const pendingHandle = typeof window !== 'undefined' ? localStorage.getItem('vibe_pending_handle') || '' : '';
+        const pendingPhone = typeof window !== 'undefined' ? localStorage.getItem('vibe_pending_phone') || '' : '';
+
+        const userName = meta?.name || pendingName || supaUser?.user_metadata?.full_name || normalizedEmail.split('@')[0];
+        const userHandle = meta?.handle || pendingHandle || supaUser?.user_metadata?.handle || normalizedEmail.split('@')[0];
+        const userPhone = pendingPhone || supaUser?.user_metadata?.phone || '';
+
+        // If a password was provided during registration, finalize account via password register API
+        if (pendingPassword) {
+          try {
+            await fetch('/api/auth/password/register', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                email: normalizedEmail,
+                password: pendingPassword,
+                name: userName,
+                handle: userHandle,
+                phone: userPhone,
+                role: finalRole,
+              }),
+            });
+          } catch (regErr) {
+            console.warn('Password registration notice:', regErr);
+          }
+          // Clean up stashed password from session
+          if (typeof window !== 'undefined') {
+            sessionStorage.removeItem('vibe_pending_password');
+            localStorage.removeItem('vibe_pending_name');
+            localStorage.removeItem('vibe_pending_handle');
+            localStorage.removeItem('vibe_pending_phone');
+          }
+        }
 
         // Create or update the record in public.profiles (if table exists)
         try {
@@ -460,7 +560,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             {
               id: verifiedUserId,
               email: normalizedEmail,
-              role: 'organizer',
+              role: finalRole,
               name: userName,
               handle: userHandle,
               created_at: new Date().toISOString(),
@@ -476,8 +576,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           name: userName,
           email: normalizedEmail,
           handle: userHandle,
-          role: 'organizer',
-          phone: supaUser?.user_metadata?.phone || '',
+          role: finalRole,
+          phone: userPhone,
         };
         saveProfileLocally(newProf);
         setUser({
@@ -487,7 +587,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           user_metadata: {
             full_name: newProf.name,
             name: newProf.name,
-            role: 'organizer',
+            role: finalRole,
             handle: newProf.handle,
           },
           aud: 'authenticated',
@@ -534,6 +634,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         session,
         profile,
         loading,
+        signInWithPassword,
         signInWithEmail,
         signUpWithEmail,
         verifyEmailOtp,
