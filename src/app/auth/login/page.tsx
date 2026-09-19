@@ -45,12 +45,10 @@ function AuthContent() {
   // signin sub-mode: 'password' (default) or 'otp'
   const [signinMode, setSigninMode] = useState<'password' | 'otp'>('password');
 
-  const [email, setEmail] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('vibe_pending_auth_email') || '';
-    }
-    return '';
-  });
+  // ── DO NOT initialize any field from localStorage in useState — it causes a hydration
+  // mismatch (server sees '' but client sees localStorage value) which triggers a full
+  // component remount, clearing all the other fields like name/password. Use useEffect instead.
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -60,10 +58,33 @@ function AuthContent() {
   const [handle, setHandle] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [step, setStep] = useState<'form' | 'otp' | 'success'>('form');
+  const [otpPurpose, setOtpPurpose] = useState<'signup' | 'reset' | 'signin'>('signup');
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showResetLink, setShowResetLink] = useState(false);
+
+  // ── Restore persisted form data after mount (avoids hydration mismatch) ──
+  useEffect(() => {
+    const savedEmail = localStorage.getItem('vibe_pending_auth_email') || '';
+    const savedName = localStorage.getItem('vibe_pending_name') || '';
+    const savedHandle = localStorage.getItem('vibe_pending_handle') || '';
+    const savedPhone = localStorage.getItem('vibe_pending_phone') || '';
+    if (savedEmail) setEmail(savedEmail);
+    if (savedName) setName(savedName);
+    if (savedHandle) setHandle(savedHandle);
+    if (savedPhone) setPhone(savedPhone);
+  }, []);
+
+  // ── Redirect already-authenticated users away from the auth page ──
+  // Without this, a logged-in user visiting /auth/login would go through signup
+  // again and accidentally overwrite their profile with empty data.
+  useEffect(() => {
+    if (profile && step === 'form') {
+      router.replace(redirectTo || '/dashboard');
+    }
+  }, [profile, step, redirectTo, router]);
 
   const getPendingEmail = () =>
     (
@@ -100,6 +121,7 @@ function AuthContent() {
 
     setLoading(true);
     setError(null);
+    setShowResetLink(false);
 
     const res = await signInWithPassword(cleanEmail, password);
     setLoading(false);
@@ -107,8 +129,51 @@ function AuthContent() {
     if (res.success) {
       setStep('success');
       setTimeout(() => router.push(redirectTo || '/dashboard'), 900);
+    } else if ((res as any).errorType === 'NOT_FOUND') {
+      // Email not registered — auto-switch to signup with email pre-filled
+      setError(null);
+      setMessage(`No account found for ${cleanEmail}. Create one below!`);
+      setMode('signup');
+    } else if ((res as any).errorType === 'WRONG_PASSWORD') {
+      setError('Incorrect password. Please try again.');
+      setShowResetLink(true);
     } else {
-      setError(res.error || 'Invalid email or password.');
+      setError(res.error || 'Sign in failed. Please check your details.');
+      setShowResetLink(true);
+    }
+  };
+
+  /* ─── Reset password via OTP ─── */
+  const handleResetPassword = async () => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      setError('Please enter your email address first.');
+      return;
+    }
+    if (!password || password.length < 6) {
+      setError('Please enter the new password you want to use (min. 6 characters) in the password field, then click Reset.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('vibe_pending_auth_email', cleanEmail);
+      // Stash the new password so verifyEmailOtp can store the correct hash
+      sessionStorage.setItem('vibe_pending_password', password);
+      localStorage.setItem('vibe_pending_name', name || cleanEmail.split('@')[0]);
+    }
+
+    const res = await signInWithEmail(cleanEmail, 'organizer');
+    setLoading(false);
+
+    if (res.success) {
+      setOtpPurpose('reset');
+      setStep('otp');
+      setMessage(`A 6-digit reset code has been sent to ${cleanEmail}. Enter it to set your new password.`);
+    } else {
+      setError(res.error || 'Failed to send reset code. Check your email address.');
     }
   };
 
@@ -173,8 +238,14 @@ function AuthContent() {
     setLoading(false);
 
     if (res.success) {
+      setOtpPurpose('signup');
       setStep('otp');
       setMessage(`Verification code sent to ${cleanEmail}. Enter it below to activate your account.`);
+    } else if ((res as any).errorType === 'EMAIL_EXISTS') {
+      // Account already exists — auto-switch to sign-in with email pre-filled
+      setError(null);
+      setMessage(`An account already exists for ${cleanEmail}. Sign in below!`);
+      setMode('signin');
     } else {
       setError(res.error || 'Failed to create account. Please try again.');
     }
@@ -202,10 +273,18 @@ function AuthContent() {
       role: 'organizer',
       name: name.trim() || undefined,
       handle: handle.trim() || undefined,
+      // Pass password explicitly so the register API always gets it,
+      // even if sessionStorage was cleared between navigations
+      password: password || undefined,
     });
     setLoading(false);
 
     if (res.success) {
+      // Clean up pending signup data — no longer needed after successful verification
+      localStorage.removeItem('vibe_pending_auth_email');
+      localStorage.removeItem('vibe_pending_name');
+      localStorage.removeItem('vibe_pending_handle');
+      localStorage.removeItem('vibe_pending_phone');
       setStep('success');
       setTimeout(() => router.push(redirectTo || '/dashboard'), 900);
     } else {
@@ -365,6 +444,22 @@ function AuthContent() {
                         Create account
                       </button>
                     </p>
+                    {/* Reset password helper — only shown after a failed login */}
+                    {showResetLink && (
+                      <div className="p-3 bg-[#F4F1EC] border border-[#C9A84C]/30 rounded-xl text-[11px] text-[#4B4B4B] space-y-2">
+                        <p className="font-semibold text-[#1A1A2E]">🔑 Forgot or reset password?</p>
+                        <p>Type your new password in the field above, then click the button below to verify via email code.</p>
+                        <button
+                          type="button"
+                          id="reset-password-btn"
+                          disabled={loading || !email.trim() || !password || password.length < 6}
+                          onClick={handleResetPassword}
+                          className="w-full py-2 px-3 rounded-lg bg-[#1A1A2E] hover:bg-[#2A2A4E] text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                        >
+                          {loading ? <><Loader2 className="w-3 h-3 animate-spin" /><span>Sending code...</span></> : <><KeyRound className="w-3 h-3" /><span>Reset Password via Email Code</span></>}
+                        </button>
+                      </div>
+                    )}
                   </form>
                 )}
 
@@ -419,7 +514,10 @@ function AuthContent() {
                       type="text"
                       required
                       value={name}
-                      onChange={(e) => setName(e.target.value)}
+                      onChange={(e) => {
+                        setName(e.target.value);
+                        localStorage.setItem('vibe_pending_name', e.target.value);
+                      }}
                       placeholder="Your full name"
                       className="w-full pl-10 pr-4 py-2.5 bg-[#F9F7F4] border border-[#E8E4DF] rounded-xl text-sm text-[#0F0F0F] outline-none focus:border-[#1A1A2E] focus:bg-white transition-colors"
                     />
@@ -436,7 +534,10 @@ function AuthContent() {
                       type="email"
                       required
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        localStorage.setItem('vibe_pending_auth_email', e.target.value.trim().toLowerCase());
+                      }}
                       placeholder="you@example.com"
                       className="w-full pl-10 pr-4 py-2.5 bg-[#F9F7F4] border border-[#E8E4DF] rounded-xl text-sm text-[#0F0F0F] outline-none focus:border-[#1A1A2E] focus:bg-white transition-colors"
                     />
@@ -514,7 +615,10 @@ function AuthContent() {
                       <input
                         type="tel"
                         value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
+                        onChange={(e) => {
+                          setPhone(e.target.value);
+                          localStorage.setItem('vibe_pending_phone', e.target.value);
+                        }}
                         placeholder="+91..."
                         className="w-full pl-8 pr-3 py-2 bg-[#F9F7F4] border border-[#E8E4DF] rounded-xl text-xs text-[#0F0F0F] outline-none focus:border-[#1A1A2E] focus:bg-white"
                       />
@@ -527,7 +631,11 @@ function AuthContent() {
                       <input
                         type="text"
                         value={handle}
-                        onChange={(e) => setHandle(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                        onChange={(e) => {
+                          const cleaned = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '');
+                          setHandle(cleaned);
+                          localStorage.setItem('vibe_pending_handle', cleaned);
+                        }}
                         placeholder="yourname"
                         className="w-full pl-8 pr-3 py-2 bg-[#F9F7F4] border border-[#E8E4DF] rounded-xl text-xs text-[#0F0F0F] outline-none focus:border-[#1A1A2E] focus:bg-white"
                       />

@@ -32,9 +32,9 @@ interface AuthContextType {
   session: Session | null;
   profile: UserProfile | null;
   loading: boolean;
-  signInWithPassword: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  signInWithPassword: (email: string, password: string) => Promise<{ success: boolean; error?: string; errorType?: string }>;
   signInWithEmail: (email: string, role?: 'organizer' | 'guest') => Promise<{ success: boolean; error?: string }>;
-  signUpWithEmail: (params: SignUpParams) => Promise<{ success: boolean; error?: string }>;
+  signUpWithEmail: (params: SignUpParams) => Promise<{ success: boolean; error?: string; errorType?: string }>;
   verifyEmailOtp: (
     email: string,
     token: string,
@@ -51,43 +51,14 @@ const STORAGE_KEY_PROFILE = 'vibe_auth_profile';
 const STORAGE_KEY_ROLE = 'vibe_user_role';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [profile, setProfile] = useState<UserProfile | null>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY_PROFILE);
-        if (saved) return JSON.parse(saved);
-      } catch {}
-    }
-    return null;
-  });
-
-  const [user, setUser] = useState<User | null>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY_PROFILE);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          return {
-            id: parsed.id,
-            email: parsed.email,
-            app_metadata: {},
-            user_metadata: {
-              full_name: parsed.name,
-              name: parsed.name,
-              role: parsed.role,
-              handle: parsed.handle,
-            },
-            aud: 'authenticated',
-            created_at: new Date().toISOString(),
-          } as any;
-        }
-      } catch {}
-    }
-    return null;
-  });
-
+  // DO NOT initialize from localStorage in useState — the initializer runs on the server
+  // (where window is undefined) and returns null, but on the client it returns a value.
+  // React detects this mismatch and causes a hydration error + full component remount.
+  // Instead, start as null everywhere and populate via useEffect after mount.
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   // Sync profile state with local persistence and user state
   const saveProfileLocally = (prof: UserProfile | null) => {
@@ -239,7 +210,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const normalizedEmail = email.trim().toLowerCase();
 
-      // 1. Try Supabase Auth signInWithPassword
+      // 1. Try the server API first — it returns specific errorType (NOT_FOUND, WRONG_PASSWORD)
+      //    which lets the UI show smart messages and auto-switch modes.
+      try {
+        const res = await fetch('/api/auth/password/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: normalizedEmail, password }),
+        });
+        const resData = await res.json();
+        if (resData.success && resData.user) {
+          const newProf: UserProfile = {
+            id: resData.user.id,
+            name: resData.user.name || normalizedEmail.split('@')[0],
+            email: normalizedEmail,
+            handle: resData.user.handle || normalizedEmail.split('@')[0],
+            role: resData.user.role || 'organizer',
+          };
+          saveProfileLocally(newProf);
+          return { success: true };
+        }
+        // Return the specific errorType so the UI can react intelligently
+        return {
+          success: false,
+          error: resData.error || 'Invalid email or password.',
+          errorType: resData.errorType,
+        };
+      } catch {}
+
+      // 2. Fallback: Try Supabase Auth directly (works for confirmed users)
       const { data, error } = await supabase.auth.signInWithPassword({
         email: normalizedEmail,
         password,
@@ -262,28 +261,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { success: true };
       }
 
-      // 2. Fallback to server API route
-      try {
-        const res = await fetch('/api/auth/password/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: normalizedEmail, password }),
-        });
-        const resData = await res.json();
-        if (resData.success && resData.user) {
-          const newProf: UserProfile = {
-            id: resData.user.id,
-            name: resData.user.name || normalizedEmail.split('@')[0],
-            email: normalizedEmail,
-            handle: resData.user.handle || normalizedEmail.split('@')[0],
-            role: resData.user.role || 'organizer',
-          };
-          saveProfileLocally(newProf);
-          return { success: true };
-        }
-        return { success: false, error: resData.error || 'Invalid email or password.' };
-      } catch {}
-
       return {
         success: false,
         error:
@@ -295,6 +272,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { success: false, error: err.message || 'Sign in failed' };
     }
   };
+
 
   // Passwordless OTP sign in
   const signInWithEmail = async (email: string, role: 'organizer' | 'guest' = 'organizer') => {
@@ -367,6 +345,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signUpWithEmail = async ({ email, name, role, password, handle, phone }: SignUpParams) => {
     try {
       const normalizedEmail = email.trim().toLowerCase();
+
+      // ── 0. Check if email already has an account before sending OTP ──
+      try {
+        const checkRes = await fetch('/api/auth/check-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: normalizedEmail }),
+        });
+        const checkData = await checkRes.json();
+        if (checkData.exists) {
+          return {
+            success: false,
+            error: 'An account with this email already exists. Please sign in instead.',
+            errorType: 'EMAIL_EXISTS',
+          };
+        }
+      } catch {
+        // Non-fatal — proceed with signup if check fails
+      }
+
       if (typeof window !== 'undefined') {
         localStorage.setItem(STORAGE_KEY_ROLE, role);
         localStorage.setItem('vibe_pending_auth_email', normalizedEmail);
@@ -527,10 +525,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const userHandle = meta?.handle || pendingHandle || supaUser?.user_metadata?.handle || normalizedEmail.split('@')[0];
         const userPhone = pendingPhone || supaUser?.user_metadata?.phone || '';
 
-        // If a password was provided during registration, finalize account via password register API
+        // If a password was provided during registration (either via meta or sessionStorage),
+        // finalize account via password register API. This upserts the hash in user_credentials
+        // so the user can log in with password immediately after OTP verification.
         if (pendingPassword) {
           try {
-            await fetch('/api/auth/password/register', {
+            const regRes = await fetch('/api/auth/password/register', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -542,6 +542,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 role: finalRole,
               }),
             });
+            const regData = await regRes.json();
+            if (!regData.success) {
+              console.warn('Password registration returned error:', regData.error);
+            } else {
+              console.log('[Auth] Password hash stored successfully for:', normalizedEmail);
+            }
           } catch (regErr) {
             console.warn('Password registration notice:', regErr);
           }

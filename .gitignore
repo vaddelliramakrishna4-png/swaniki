@@ -24,6 +24,7 @@
 .DS_Store
 *.pem
 .otp-store.json
+.local-credentials.json
 local-*.json
 
 # debug
