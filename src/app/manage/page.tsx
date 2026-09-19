@@ -24,6 +24,11 @@ import {
   Building2,
   ChevronRight,
   TrendingUp,
+  Pencil,
+  Trash2,
+  AlertTriangle,
+  Loader2,
+  X,
 } from 'lucide-react';
 import { Navbar } from '@/components/ui/Navbar';
 import { Footer } from '@/components/ui/Footer';
@@ -65,6 +70,11 @@ export default function OrganizerDashboardPage() {
 
   // General Notification
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Delete confirmation dialog state
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleteTargetTitle, setDeleteTargetTitle] = useState<string>('');
+  const [deleting, setDeleting] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -108,6 +118,57 @@ export default function OrganizerDashboardPage() {
       await loadData();
     } else {
       showToast(`Error duplicating gathering: ${res.error || 'Unknown error'}`);
+    }
+  };
+
+  // Open the delete confirmation dialog
+  const openDeleteDialog = (eventId: string, title: string) => {
+    setDeleteTargetId(eventId);
+    setDeleteTargetTitle(title);
+  };
+
+  // Close the delete confirmation dialog
+  const closeDeleteDialog = () => {
+    if (deleting) return;
+    setDeleteTargetId(null);
+    setDeleteTargetTitle('');
+  };
+
+  // Handle Event Deletion
+  const handleDelete = async () => {
+    if (!deleteTargetId || deleting) return;
+    setDeleting(true);
+    try {
+      // Get access token for Authorization header
+      let accessToken: string | null = null;
+      try {
+        const { supabase } = await import('@/lib/supabase/client');
+        const { data } = await supabase.auth.getSession();
+        accessToken = data.session?.access_token || null;
+      } catch {}
+
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+
+      const res = await fetch(`/api/events/${deleteTargetId}`, {
+        method: 'DELETE',
+        headers,
+      });
+      const json = await res.json();
+
+      if (res.ok && json.success) {
+        showToast(`"${deleteTargetTitle}" has been deleted and guests notified.`);
+        setDeleteTargetId(null);
+        setDeleteTargetTitle('');
+        await loadData();
+      } else {
+        showToast(`Error deleting event: ${json.error || 'Unknown error'}`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      showToast(`Error: ${msg}`);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -199,6 +260,89 @@ export default function OrganizerDashboardPage() {
   return (
     <div className="min-h-screen flex flex-col parchment-bg text-[#0F0F0F]">
       <Navbar />
+
+      {/* ── Delete Confirmation Dialog ──────────────────────────────────── */}
+      {deleteTargetId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-dialog-title"
+        >
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={closeDeleteDialog}
+          />
+
+          {/* Dialog Card */}
+          <div className="relative bg-white rounded-2xl shadow-2xl border border-[#E8E4DF] w-full max-w-md p-6 space-y-5 animate-in fade-in zoom-in-95">
+            {/* Close Button */}
+            <button
+              onClick={closeDeleteDialog}
+              disabled={deleting}
+              className="absolute top-4 right-4 p-1.5 rounded-lg text-[#8A8A8A] hover:bg-[#F9F7F4] hover:text-[#1A1A2E] transition-colors disabled:opacity-50"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            {/* Icon + Heading */}
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-red-500" />
+              </div>
+              <div>
+                <h3 id="delete-dialog-title" className="font-bold text-[#1A1A2E] text-base">
+                  Delete this gathering?
+                </h3>
+                <p className="text-xs text-[#4B4B4B] mt-1 leading-relaxed">
+                  <span className="font-semibold text-[#1A1A2E]">"{deleteTargetTitle}"</span> will be
+                  permanently removed. All registered guests will receive a cancellation email and
+                  their RSVPs will be cleared.
+                </p>
+              </div>
+            </div>
+
+            {/* Warning Banner */}
+            <div className="flex items-center gap-2.5 p-3.5 bg-red-50 border border-red-100 rounded-xl">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+              <p className="text-xs text-red-600 font-medium">
+                This action cannot be undone.
+              </p>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3 pt-1">
+              <button
+                onClick={closeDeleteDialog}
+                disabled={deleting}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-[#E8E4DF] bg-white text-xs font-bold text-[#4B4B4B] hover:bg-[#F9F7F4] transition-all disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                id="delete-event-confirm"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-60 shadow-sm"
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Deleting…
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete & Notify Guests
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 w-full flex-1 flex flex-col md:flex-row gap-8">
         {/* Left Sidebar Navigation */}
@@ -408,7 +552,17 @@ export default function OrganizerDashboardPage() {
                       </div>
 
                       {/* Action Buttons */}
-                      <div className="flex items-center gap-2 shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0">
+                      <div className="flex items-center gap-2 shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0 flex-wrap">
+                        {/* Edit Event */}
+                        <Link
+                          href={`/events/${evt.id}/edit`}
+                          title="Edit Event Details"
+                          className="px-3 py-2 rounded-lg bg-white border border-[#E8E4DF] hover:bg-[#F9F7F4] text-[#4B4B4B] text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
+                        >
+                          <Pencil className="w-3.5 h-3.5 text-[#C9A84C]" />
+                          <span>Edit</span>
+                        </Link>
+
                         {/* Duplicate Event Action */}
                         <button
                           onClick={() => handleDuplicate(evt.id)}
@@ -426,7 +580,7 @@ export default function OrganizerDashboardPage() {
                           className="px-3 py-2 rounded-lg bg-white border border-[#E8E4DF] hover:bg-[#F9F7F4] text-[#4B4B4B] text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
                         >
                           <Share2 className="w-3.5 h-3.5 text-[#E8621A]" />
-                          <span>Share Studio</span>
+                          <span>Share</span>
                         </Link>
 
                         {/* View Live */}
@@ -437,6 +591,16 @@ export default function OrganizerDashboardPage() {
                         >
                           <ExternalLink className="w-4 h-4" />
                         </Link>
+
+                        {/* Delete Event */}
+                        <button
+                          onClick={() => openDeleteDialog(evt.id, evt.title)}
+                          title="Delete Event"
+                          id={`delete-event-${evt.id}`}
+                          className="p-2 rounded-lg bg-white border border-red-100 hover:bg-red-50 hover:border-red-200 text-red-400 hover:text-red-600 transition-colors shadow-sm"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
                   );
